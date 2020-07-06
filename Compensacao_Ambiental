@@ -29,10 +29,10 @@ cor.status = function(x){
   ifelse(x == "Em análise", "green", "blue")
 }
 
-Projetos = readOGR("Municipios_Zona_Mata.shp", use_iconv = TRUE, encoding = "UTF-8", stringsAsFactors = FALSE)
+Projetos = readOGR("Municipios.shp", use_iconv = TRUE, encoding = "UTF-8", stringsAsFactors = FALSE)
 Projetos = spTransform(Projetos, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
 
-Compensacao = readOGR("Compensacao_ZM.shp",
+Compensacao = readOGR("Compensacao.shp",
                       layer = "Compensacao_ZM", use_iconv = TRUE, encoding = "UTF-8", stringsAsFactors = FALSE)
 Compensacao = spTransform(Compensacao, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
 Compensacao@data = Compensacao@data[,c(-2, -6)]
