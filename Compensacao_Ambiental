@@ -1,0 +1,209 @@
+library(shiny)
+library(shinythemes)
+library(shinydashboard)
+library(ggplot2)
+library(leaflet)
+library(rgdal)
+library(rgeos)
+library(sp)
+library(DT)
+library(crosstalk)
+library(plotly)
+library(dplyr)
+
+Sem_dado = data.frame(Posicao1 = c(3,2.5,2), Posicao2 = c(1,1,1), Texto = c("Sem resultado", "para a combinação", "selecionada"))
+
+cor.data = function(col.data, inf, sup){
+  if (col.data > sup) {
+    return('blue')
+  } else if(col.data <= sup & col.data > inf){
+    return('green')
+  } else if (col.data <= inf){
+    return('red')
+  }
+}
+
+cor.status = function(x){
+  ifelse(x == "Em análise", "green", "blue")
+}
+
+Projetos = readOGR("Municipios_Zona_Mata.shp", use_iconv = TRUE, encoding = "UTF-8", stringsAsFactors = FALSE)
+Projetos = spTransform(Projetos, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+
+Compensacao = readOGR("Compensacao_ZM.shp",
+                      layer = "Compensacao_ZM", use_iconv = TRUE, encoding = "UTF-8", stringsAsFactors = FALSE)
+Compensacao = spTransform(Compensacao, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+Compensacao@data = Compensacao@data[,c(-2, -6)]
+names(Compensacao@data)[2:6] = c("Município", "Ano", "Status", "Area_ha", "Data_Venc")
+
+centroides = gCentroid(Compensacao, byid = T)
+centroides2 = data.frame(centroides, Compensacao@data)
+centroides2$Data_Venc = as.Date(centroides2$Data_Venc, "%d/%m/%Y")
+Max_data_centroide = as.character(max(centroides2$Data_Venc), "%d/%m/%Y")
+
+At_Comp = na.omit(Compensacao@data, cols = "Ano")
+At_Comp$Ano = as.numeric(as.character(At_Comp$Ano))
+At_Comp$Codigo = as.numeric(as.character(At_Comp$Codigo))
+
+eixo_x = function(data_cor, data_cor_min, data_cor_max){
+  ifelse(data_cor  == "red", return(as.character(data_cor_min, "%d/%m/%Y")),
+         ifelse(data_cor == "green", return(as.character(data_cor_max, "%d/%m/%Y")),
+                ifelse(data_cor  == "blue", return(Max_data_centroide))))
+}
+
+ui <- fluidPage(theme = shinytheme("cerulean"),
+                navbarPage("Áreas de Compensação Ambiental",
+                           tabPanel("Mapa",
+                                    sidebarPanel(textInput("data1", "Data de Vencimento 01", value = "01/01/2022"),
+                                                 textInput("data2", "Data de Vencimento 02", value = "02/02/2025"), width = 2),
+                                    mainPanel( leafletOutput(outputId = "mymap", width = "100%", height = 350 ),
+                                               DT::dataTableOutput("mytable"))
+                           ),
+                           tabPanel("Análise Gráfica",
+                                    
+                                    sidebarPanel(
+                                      selectInput("dados_regiao", "Região",
+                                                  c("Regional" = "Todas",
+                                                    "Região 01" = "Reg1",
+                                                    "Região 02" = "Reg2",
+                                                    "Região 03" = "Reg3")),
+                                      sliderInput("ano_busca", label = "Período de Análise (Processos/Ano)",
+                                                  min = min(At_Comp$Ano),
+                                                  max = max(At_Comp$Ano),
+                                                  value = c(min(At_Comp$Ano), max(At_Comp$Ano)),
+                                                  sep = "",
+                                                  step = 1),
+                                      textInput("data1g", "Data de Vencimento 01", value = "01/01/2020"),
+                                      textInput("data2g", "Data de Vencimento 02", value = "02/02/2026")
+                                    ),
+                                    mainPanel(width = 4,
+                                              h4("Quantidade de Processos por Ano", width = 70, align = "center"),
+                                              plotlyOutput("Histograma", width = "100%", height = "290px"),
+                                              h3("                                  ",  width = 70, align = "center"),
+                                              h4("Quantidade de Processos por Data de Vencimento", width = 70, align = "center"),
+                                              plotlyOutput("Hist_Vencimentos", width = "100%", height = "290px"))
+                           )
+                )
+                
+)
+
+server <- function(input, output){
+  
+  data_inf <- reactive({
+    as.Date(input$data1, "%d/%m/%Y")
+  })
+  
+  data_sup <- reactive({
+    as.Date(input$data2, "%d/%m/%Y")
+  })
+  
+  pontos = reactive({
+    data.frame(centroides2, Cor = sapply(centroides2$Data_Venc, cor.data, inf = data_inf(), sup = data_sup()))
+  })  
+  mapa_pontos = reactive({
+    SharedData$new(pontos()[,3:9])
+  })
+  
+  icons = reactive({awesomeIcons(
+    icon = 'ios-close',
+    iconColor = 'black',
+    library = 'ion',
+    marker = pontos()$Cor)})
+  
+  mapdata_leaf = reactive({mapa_pontos()%>%
+      leaflet()%>%
+      addProviderTiles('Esri.WorldImagery')%>%
+      addPolygons(data = Projetos,
+                  weight = 2.5,
+                  smoothFactor = 0.5,
+                  color = 'red',
+                  fillOpacity = 0,
+                  popup = paste ("Município = ", Projetos$NM_MUNICIP )) %>%
+      addPolygons(data = Compensacao,
+                  weight = 1,
+                  smoothFactor = 0.5,
+                  #fillColor = c()$Cor,
+                  color = 'yellow',
+                  fillOpacity = 0.5)%>%
+      #popup = paste( "Teste = ", Compensacao$Testando, "<p>", "Id = ", Compensacao$,"<p>", "Protocolo = ", Compensacao$Protocolo))
+      addAwesomeMarkers(lng = pontos()$x, lat = pontos()$y, icon=icons(),
+                        popup = paste("Código: ", centroides2$Codigo, "<p>", "Área (ha):", centroides2$Area_ha ))%>%
+      
+      addLegend("bottomright", colors= c("blue", "green", "red", "yellow"), opacity = 0.7,
+                labels= c(paste("Vence até o dia ", Max_data_centroide),
+                          paste("Vence até o dia ", as.character(data_sup(), "%d/%m/%Y")),
+                          paste("Vence até o dia ", as.character(data_inf(), "%d/%m/%Y")), "Área de Compensação Ambiental"), title="Legenda")})
+  
+  mapdata_table <- reactive({datatable(mapa_pontos(), extensions="Scroller", style="bootstrap", class="compact", width="100%",
+                                       options=list(deferRender=TRUE, scrollY=300, scroller=TRUE))})  
+  
+  output$mymap <- renderLeaflet({
+    mapdata_leaf()
+  })
+  
+  nome_regiao <- reactive({
+    ifelse(input$dados_regiao == "Todas", return (c("Reg1", "Reg2", "Reg3")), return(input$dados_regiao))
+    
+  })
+  
+  nome_ano <- reactive({
+    input$ano_busca[1]:input$ano_busca[2]
+  })
+  
+  grafico1 = reactive({
+    At_Comp %>%
+      filter(Ano %in% nome_ano() & Regiao %in% nome_regiao()) %>% 
+      group_by(Status) %>% 
+      summarise(Frequencia = n()) %>% 
+      mutate(Cor = sapply(Status, cor.status))
+  })
+  
+  output$mytable = DT::renderDataTable({
+    mapdata_table()
+  }, server = FALSE)
+  
+  output$Histograma = renderPlotly({
+    if(nrow(grafico1())>0){
+      ggplotly(ggplot(grafico1(), aes(x = sort(Status, decreasing = FALSE), y = Frequencia)) + geom_bar(stat="identity", fill = grafico1()$Cor ) +
+                 xlab("Status") + ylab("Frequência") + theme_classic(), tooltip = "Freq")
+    } else {
+      ggplotly(ggplot(Sem_dado, aes(x = Posicao2, y = Posicao1, label = Texto)) + geom_text(size = 10) + ylab("") + xlab("") + ylim(0,4) + theme_classic())
+    }
+  })
+  
+  data_inf2 <- reactive({
+    as.Date(input$data1g, "%d/%m/%Y")
+  })
+  
+  data_sup2 <- reactive({
+    as.Date(input$data2g, "%d/%m/%Y")
+  })
+  
+  Tab_venc = reactive({ data.frame(At_Comp[At_Comp$Regiao %in% nome_regiao(), ],
+                                   Cor = sapply(as.Date(At_Comp[At_Comp$Regiao %in% nome_regiao(), ]$Data_Venc,"%d/%m/%Y"), 
+                                                cor.data, inf = data_inf2(), sup = data_sup2()))
+  })
+  
+    grafico2 = reactive({
+      Tab_venc() %>% 
+        group_by(Cor) %>% 
+        summarise(Frequencia = n()) %>% 
+        arrange(desc(Cor)) %>% 
+        mutate(eixo =  sapply(Cor, eixo_x, data_cor_min = data_inf2(), data_cor_max = data_sup2()), Ordem = 1:n())
+  })
+  
+  output$Hist_Vencimentos = renderPlotly({
+    if(nrow(grafico2())>0){
+      ggplotly(ggplot(grafico2(), aes(x = Ordem, y = Frequencia)) +
+                 geom_bar(stat="identity", fill = grafico2()$Cor) +
+                 scale_x_discrete(limits = 1: nrow(grafico2()), labels = as.character(grafico2()$eixo, "%d/%m/%Y")) +
+                 xlab("") + ylab("Frequência") + theme_classic(), tooltip = "Frequencia" )
+    } else {
+      ggplotly(ggplot(Sem_dado, aes(x = Posicao2, y = Posicao1, label = Texto)) + geom_text(size = 10) + ylab("") + xlab("") + ylim(0,4) + theme_classic())
+    }
+  })
+  
+}
+
+shinyApp(ui = ui, server = server)
+
